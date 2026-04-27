@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, reactive } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, reactive } from 'vue'
 import { useTodoStore } from '@/stores/todo'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Delete } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import type { CheckboxValueType } from 'element-plus'
 import { useTheme } from '@/hooks/useTheme'
+import Draggable from 'vuedraggable'
+
+
+interface Todo {
+  id: number
+  text: string
+  done: boolean
+  endTime: number
+}
 
 const todoStore = useTodoStore()
 
@@ -14,24 +23,26 @@ const filter = ref<'all' | 'done' | 'todo'>('all')
 const editingId = ref<number | null>(null)
 const editingText = ref('')
 const { dark, toggleTheme } = useTheme()
-// 弹窗状态
 const editDialogVisible = ref(false)
-// 编辑表单数据
+
 const editForm = reactive({
   id: '',
-  title:'',
-  completed: false
+  title: '',
+  completed: false,
+  minutes: 0,
+  endTime: 0
 })
-//图表
+
+const refresh = ref(0)
+let timer: any = null
+
 const chartRef = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
 
-// 2. 监听主题变化 → 执行图表 resize （只在当前页面生效）
 watch(dark, () => {
-  chart?.resize() // 直接用当前页面的 chart 实例，绝对不会错
+  chart?.resize()
 })
 
-//初始化
 onMounted(() => {
   todoStore.fetchTodos()
 
@@ -39,27 +50,32 @@ onMounted(() => {
     chart = echarts.init(chartRef.value)
     updateChart()
   }
+
+  timer = setInterval(() => refresh.value++, 1000)
 })
 
-//监听更新图表
+onUnmounted(() => {
+  clearInterval(timer)
+})
+
 watch(
   () => todoStore.todos,
   () => updateChart(),
-  { deep: true },
+  { deep: true }
 )
 
-//筛选
+watch(
+  refresh,
+  () => autoCompleteTodo(),
+  { immediate: true }
+)
+
 const filteredTodos = computed(() => {
-  if (filter.value === 'done') {
-    return todoStore.todos.filter((t) => t.done)
-  }
-  if (filter.value === 'todo') {
-    return todoStore.todos.filter((t) => !t.done)
-  }
+  if (filter.value === 'done') return todoStore.todos.filter(t => t.done)
+  if (filter.value === 'todo') return todoStore.todos.filter(t => !t.done)
   return todoStore.todos
 })
 
-//添加
 async function addTodo() {
   const value = newTodo.value.trim()
   if (!value) {
@@ -67,12 +83,9 @@ async function addTodo() {
     return
   }
   await todoStore.addTodo(value)
-  newTodo.value = '' // 清空输入框
+  newTodo.value = ''
 }
 
-//删除
-// 完善删除函数：加确认弹窗，防止误删
-// 删除任务
 async function removeTodo(id: number) {
   try {
     await ElMessageBox.confirm('确定要删除这条任务吗？删除后无法恢复', '确认删除', {
@@ -80,81 +93,83 @@ async function removeTodo(id: number) {
       cancelButtonText: '取消',
       type: 'warning',
     })
-
-    // 只有点确定才会执行这里
     await todoStore.removeTodo(id)
-  } catch (error) {
-    // 取消删除 → 不做任何提示
-  }
+  } catch (error) {}
 }
-//切换完成状态
-async function toggleTodo(todo: any) {
+
+async function toggleTodo(todo: Todo) {
+  todo.endTime = 0
   await todoStore.toggleTodo(todo)
 }
 
-//开始编辑
-function startEdit(todo: any) {
+function startEdit(todo: Todo) {
   editingId.value = todo.id
   editingText.value = todo.text
 }
 
-//保存编辑
-async function saveEdit(todo: any) {
+async function saveEdit(todo: Todo) {
   const value = editingText.value.trim()
   if (!value) return
-
   await todoStore.updateTodo(todo, value)
   editingId.value = null
-
 }
 
-//更新图表
 function updateChart() {
   if (!chart) return
-
-  const done = todoStore.todos.filter((t) => t.done).length
+  const done = todoStore.todos.filter(t => t.done).length
   const todo = todoStore.todos.length - done
 
   chart.setOption({
     title: { text: '任务完成情况', left: 'center', color: dark.value ? '#fff' : '#333' },
     tooltip: { trigger: 'item' },
-    series: [
-      {
-        type: 'pie',
-        radius: '60%',
-        data: [
-          { value: done, name: '已完成' },
-          { value: todo, name: '未完成' },
-        ],
-        label: { color: dark.value ? '#fff' : '#333' },
-      },
-    ],
+    series: [{
+      type: 'pie',
+      radius: '60%',
+      data: [
+        { value: done, name: '已完成' },
+        { value: todo, name: '未完成' },
+      ],
+      label: { color: dark.value ? '#fff' : '#333' },
+    }]
   })
 }
 
-// 编辑任务 弹窗
-// 打开弹窗，把当前任务的数据塞进去
-const openEditDialog = (task) => {
-  editForm.id = task.id
-  editForm.title = task.title
-  editForm.completed = task.completed
+const openEditDialog = (todo: Todo) => {
+  editForm.id = todo.id
+  editForm.title = todo.text
+  editForm.completed = todo.done
   editDialogVisible.value = true
 }
 
-// 确认修改
 const confirmEdit = async () => {
-  try {
-    // 调用 Pinia 方法
-    await todoStore.updateTodoTextAndDone(
-      Number(editForm.id),
-      editForm.title,
-      editForm.completed
-    )
-    editDialogVisible.value = false
-    ElMessage.success('修改成功')
-  } catch (err) {
-    ElMessage.error('修改失败')
-  }
+  const endTime = Date.now() + editForm.minutes * 60 * 1000
+  await todoStore.updateTodoTextAndDone(
+    Number(editForm.id),
+    editForm.title,
+    editForm.completed,
+    endTime
+  )
+  editDialogVisible.value = false
+  ElMessage.success('保存成功')
+}
+
+function getCountdown(todo: Todo) {
+  refresh.value
+  if (!todo.endTime) return ''
+  const left = todo.endTime - Date.now()
+  if (left <= 0) return '✅ 已结束'
+  const m = Math.floor(left / 1000 / 60)
+  const s = Math.floor(left / 1000 % 60)
+  return `${m}分${s}秒`
+}
+
+function autoCompleteTodo() {
+  const now = Date.now()
+  todoStore.todos.forEach(todo => {
+    if (todo.endTime && now > todo.endTime && !todo.done) {
+      todoStore.updateTodoTextAndDone(todo.id, todo.text, true, todo.endTime)
+    }
+  })
 }
 </script>
 
@@ -162,98 +177,106 @@ const confirmEdit = async () => {
   <div class="container">
     <h2>Todo List</h2>
 
-    <!-- 黑夜模式 -->
     <button @click="toggleTheme" class="dark-btn">
       {{ dark ? '🌙' : '🌞' }}
     </button>
-    <!-- 输入 -->
+
     <div class="input-area">
       <input v-model="newTodo" @keyup.enter="addTodo" placeholder="输入任务吧" />
       <button @click="addTodo">添加</button>
     </div>
 
-    <!-- 筛选 -->
     <div class="filters">
       <button @click="filter = 'all'">全部</button>
       <button @click="filter = 'todo'">未完成</button>
       <button @click="filter = 'done'">已完成</button>
     </div>
 
-    <!-- 图表 -->
     <div ref="chartRef" class="chart"></div>
 
-    <!-- 列表 -->
+
     <div class="todo-list-wrapper mt-5">
-      <el-card v-for="todo in filteredTodos" :key="todo.id" shadow="hover" class="todo-card">
-        <div class="flex items-center justify-between gap-3">
-          <!-- 复选框 -->
-          <input type="checkbox" :checked="todo.done" @change="toggleTodo(todo)" @click.stop />
+      <draggable
+        v-model="todoStore.todos"
+        item-key="id"
+        handle=".drag-handle"
+        :transition="300"
+        style="display: flex; flex-direction: column; gap: 12px;"
+      >
+        <template #item="{ element }">
+          <el-card shadow="hover" class="todo-card">
+            <div class="flex items-center justify-between gap-3">
+              <div class="drag-handle cursor-move text-gray-400">⋮⋮</div>
 
-          <!-- 编辑输入框 -->
-          <!-- <input
-            v-if="editingId === todo.id"
-            v-model="editingText"
-            @keyup.enter="saveEdit(todo)"
-            class="flex-1 px-2 py-1 border border-blue-500 rounded outline-none"
-          /> -->
+              <input
+                type="checkbox"
+                :checked="element.done"
+                @change="toggleTodo(element)"
+                @click.stop
+              />
 
-          <!-- 文本 -->
-          <span
+              <span
+                :class="{ done: element.done }"
+                @click.stop="startEdit(element)"
+                class="flex-1 cursor-pointer text-base"
+              >
+                {{ element.text }}
+              </span>
 
-            :class="{ done: todo.done }"
-            @click.stop="startEdit(todo)"
-            class="flex-1 cursor-pointer text-base"
-          >
-            {{ todo.text }}
-          </span>
-          <!-- 编辑文本 -->
-          <el-button
-          type="primary"
-          icon="Edit"
-          circle
-          size="small"
-          @click="openEditDialog(todo)">
+              <span class="text-sm text-blue-500">{{ getCountdown(element) }}</span>
 
-          </el-button>
-          <!-- 删除按钮 -->
-          <el-button
-            type="danger"
-            :icon="Delete"
-            circle
-            size="small"
-            @click.stop="removeTodo(todo.id)"
-          >
-          </el-button>
+              <el-button
+                type="primary"
+                icon="Edit"
+                circle
+                size="small"
+                @click="openEditDialog(element)"
+              />
 
-        </div>
-      </el-card>
-
+              <el-button
+                type="danger"
+                :icon="Delete"
+                circle
+                size="small"
+                @click.stop="removeTodo(element.id)"
+              />
+            </div>
+          </el-card>
+        </template>
+      </draggable>
     </div>
-     <!-- 编辑弹窗 -->
 
-      <el-dialog
-    v-model="editDialogVisible"
-    title="编辑任务"
-    width="400px"
-  >
-    <el-form :model="editForm" label-width="60px">
-      <el-form-item label="任务">
-        <el-input v-model="editForm.title" placeholder="请输入任务内容" />
-      </el-form-item>
-      <el-form-item label="状态">
-        <el-select v-model="editForm.completed">
-          <el-option label="未完成" :value="false" />
-          <el-option label="已完成" :value="true" />
-        </el-select>
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <div class="dialog-footer">
-        <el-button @click="editDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="confirmEdit">确认修改</el-button>
-      </div>
-    </template>
-  </el-dialog>
+    <el-dialog
+      v-model="editDialogVisible"
+      title="编辑任务"
+      width="460px"
+    >
+      <el-form :model="editForm" label-width="80px">
+        <el-form-item label="任务">
+          <el-input v-model="editForm.title" placeholder="请输入任务内容" />
+        </el-form-item>
+
+        <el-form-item label="状态">
+          <el-select v-model="editForm.completed">
+            <el-option label="未完成" :value="false" />
+            <el-option label="已完成" :value="true" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="倒计时">
+          <el-input v-model.number="editForm.minutes" placeholder="输入分钟数">
+            <template #append>分钟</template>
+          </el-input>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="editDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="confirmEdit">确认修改</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -292,11 +315,10 @@ body {
   padding: 10px;
 }
 
-/* 👉 1. 容器：绝对居中，不干扰卡片 */
 .container {
   width: 90%;
   max-width: 600px;
-  margin: 30px auto; /* 👈 强制水平居中 */
+  margin: 30px auto;
   padding: calc(var(--gap) * 2);
 }
 
@@ -306,7 +328,6 @@ h2 {
   margin-bottom: calc(var(--gap) * 3);
 }
 
-/* 👉 2. 主题按钮：简单居中 */
 .dark-btn {
   display: block;
   margin: 0 auto calc(var(--gap) * 2);
@@ -381,7 +402,6 @@ h2 {
   background: var(--card);
 }
 
-/* 👉 3. 任务列表：彻底清除多余宽度，只保留核心 flex */
 .todo-list-wrapper {
   display: flex;
   flex-direction: column;
@@ -389,38 +409,35 @@ h2 {
   margin-top: calc(var(--gap) * 2);
 }
 
-/* 👉 4. 卡片核心样式：去掉 width，只控制内边距 */
 .todo-card {
   background: var(--card) !important;
   border-color: var(--border) !important;
   transition: all 0.2s ease;
-  padding: calc(var(--gap) * 2) !important; /* 👈 重要！覆盖 Element Plus 内边距 */
+  padding: calc(var(--gap) * 2) !important;
   border-radius: 4px;
 
   &:hover {
     transform: translateY(-2px);
   }
 
-  /* 👉 5. 卡片内部：强制弹性居中 */
   > .el-card__body {
-    padding: 0 !important; /* 清除 Element Plus 内部多余 padding */
+    padding: 0 !important;
   }
 
   .flex {
     display: flex;
-    align-items: center; /* 👈 强制垂直居中 */
-    justify-content: space-between; /* 👈 两端对齐 */
+    align-items: center;
+    justify-content: space-between;
     gap: var(--gap);
-    width: 100%; /* 保证占满宽度 */
+    width: 100%;
   }
 }
 
-/* 👉 6. 文字样式：绝对居中，不跑偏 */
 .todo-card .flex-1 {
-  flex: 1; /* 占据中间所有空间 */
+  flex: 1;
   font-size: clamp(0.9rem, 3.5vw, 1rem);
   line-height: 1.5;
-  text-align: left; /* 文字左对齐 */
+  text-align: left;
   color: var(--text) !important;
 }
 
@@ -429,7 +446,6 @@ h2 {
   color: #888;
 }
 
-/* 编辑输入框 */
 .todo-card input[type="text"] {
   flex: 1;
   padding: calc(var(--gap));
@@ -439,5 +455,12 @@ h2 {
   background: var(--card);
   color: var(--text);
   font-size: clamp(0.9rem, 3.5vw, 1rem);
+}
+
+.drag-handle {
+  font-size: 18px;
+  cursor: move;
+  user-select: none;
+  color: #999;
 }
 </style>

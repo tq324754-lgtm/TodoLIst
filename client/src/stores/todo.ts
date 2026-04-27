@@ -13,7 +13,13 @@ export const useTodoStore = defineStore('todo', {
     //初始化
     async fetchTodos() {
       const res = await getTodos()
-      this.todos = res.data
+  this.todos = res.data.map(todo => {
+    // 把字符串格式的时间转成Date对象
+    if (todo.timeRange) {
+      todo.timeRange = todo.timeRange.map(t => new Date(t))
+    }
+    return todo
+  })
     },
 
     //添加
@@ -40,12 +46,20 @@ export const useTodoStore = defineStore('todo', {
       todo.done = !todo.done
     },
     //修改
-    async updateTodoTextAndDone(id: number, text: string, done: boolean) {
-      await updateTodoApi(id, { text, done })
+    async updateTodoTextAndDone(
+      id: number,
+      text: string,
+      done: boolean,
+      endTime?: number
+    ) {
+      await updateTodoApi(id, { text, done, endTime })
+
       const todo = this.todos.find(t => t.id === id)
       if (todo) {
         todo.text = text
         todo.done = done
+        
+        todo.endTime = endTime
       }
     }
   },

@@ -42,6 +42,12 @@ app.put("/todos/:id", (req, res) => {
     if (req.body.done !== undefined) {
       todo.done = req.body.done;
     }
+    // 保存时间范围
+    
+   
+    if (req.body.endTime !== undefined) {
+      todo.endTime = req.body.endTime;
+    }
   }
   res.json(todo);
 });
