@@ -1,77 +1,134 @@
 import { defineStore } from 'pinia'
 import type { Todo } from '@/types/todo'
 import { getTodos, addTodoApi, deleteTodoApi, updateTodoApi } from '@/api/todo'
-import { ElMessage } from 'element-plus'
+import { useUserStore } from './user'
+
+interface TodoState {
+  todos: Todo[]
+}
 
 export const useTodoStore = defineStore('todo', {
-  state: () => ({
-    todos: [] as Todo[],
-    list: [] as Array<{ id: string; title: string; completed: boolean}>
+  state: (): TodoState => ({
+    todos: []
   }),
-
   actions: {
-    //初始化
+    // 本地操作方法
+    initTodos(todos: Todo[]) {
+      this.todos = todos
+    },
+    addTodoLocal(todo: Todo) {
+      this.todos.push(todo)
+    },
+    removeTodoLocal(id: number) {
+      this.todos = this.todos.filter(t => t.id !== id)
+    },
+    toggleTodoLocal(todo: Todo) {
+      const target = this.todos.find(t => t.id === todo.id)
+      if (target) {
+        target.done = !target.done
+      }
+    },
+    updateTodoTextAndDoneLocal(id: number, text: string, done: boolean, endTime: number) {
+      const target = this.todos.find(t => t.id === id)
+      if (target) {
+        target.text = text
+        target.done = done
+        target.endTime = endTime
+      }
+    },
+
+    // 云端API方法
     async fetchTodos() {
-      const res = await getTodos()
-  this.todos = res.data.map(todo => {
-    // 把字符串格式的时间转成Date对象
-    if (todo.timeRange) {
-      todo.timeRange = todo.timeRange.map(t => new Date(t))
-    }
-    return todo
-  })
+      try {
+        const userStore = useUserStore()
+        if (userStore.isLoggedIn) {
+          const response = await getTodos()
+          this.initTodos(response.data)
+        } else {
+          // 未登录，使用本地存储
+          const localTodos = localStorage.getItem('todos')
+          if (localTodos) {
+            this.initTodos(JSON.parse(localTodos))
+          }
+        }
+      } catch (error) {
+        console.error('获取待办事项失败:', error)
+      }
     },
 
-    //添加
     async addTodo(text: string) {
-      const res = await addTodoApi(text)
-      this.todos.push(res.data)
+      try {
+        const userStore = useUserStore()
+        if (userStore.isLoggedIn) {
+          const response = await addTodoApi(text)
+          this.addTodoLocal(response.data)
+          return response.data
+        } else {
+          // 未登录，使用本地存储
+          const newTodo = {
+            id: Date.now(),
+            text,
+            done: false,
+            endTime: 0
+          }
+          this.addTodoLocal(newTodo)
+          // 保存到本地存储
+          localStorage.setItem('todos', JSON.stringify(this.todos))
+          return newTodo
+        }
+      } catch (error) {
+        console.error('添加待办事项失败:', error)
+        throw error
+      }
     },
 
-    //删除
-    async removeTodo(id: number) {
-      await deleteTodoApi(id)
-      this.todos = this.todos.filter((t) => t.id !== id)
+    async deleteTodo(id: number) {
+      try {
+        const userStore = useUserStore()
+        if (userStore.isLoggedIn) {
+          await deleteTodoApi(id)
+          this.removeTodoLocal(id)
+        } else {
+          // 未登录，使用本地存储
+          this.removeTodoLocal(id)
+          // 保存到本地存储
+          localStorage.setItem('todos', JSON.stringify(this.todos))
+        }
+      } catch (error) {
+        console.error('删除待办事项失败:', error)
+        throw error
+      }
     },
 
-    //编辑
-    async updateTodo(todo: Todo, text: string) {
-      await updateTodoApi(todo.id, { text })
-      todo.text = text
-    },
-
-    //切换完成状态
-    async toggleTodo(todo: Todo) {
-      await updateTodoApi(todo.id, { done: !todo.done })
-      todo.done = !todo.done
-    },
-    //修改
-    async updateTodoTextAndDone(
-      id: number,
-      text: string,
-      done: boolean,
-      endTime?: number
-    ) {
-      await updateTodoApi(id, { text, done, endTime })
-
-      const todo = this.todos.find(t => t.id === id)
-      if (todo) {
-        todo.text = text
-        todo.done = done
-        
-        todo.endTime = endTime
+    async updateTodo(id: number, data: Partial<Todo>) {
+      try {
+        const userStore = useUserStore()
+        if (userStore.isLoggedIn) {
+          const response = await updateTodoApi(id, data)
+          if (response.data) {
+            const index = this.todos.findIndex(t => t.id === id)
+            if (index !== -1) {
+              this.todos[index] = response.data
+            }
+          }
+          return response.data
+        } else {
+          // 未登录，使用本地存储
+          const index = this.todos.findIndex(t => t.id === id)
+          if (index !== -1) {
+              if (data.text !== undefined) this.todos[index]!.text = data.text
+            if (data.done !== undefined) this.todos[index]!.done = data.done
+            if (data.endTime !== undefined) this.todos[index]!.endTime = data.endTime
+            // 保存到本地存储
+            localStorage.setItem('todos', JSON.stringify(this.todos))
+          }
+          return this.todos[index]
+        }
+      } catch (error) {
+        console.error('更新待办事项失败:', error)
+        throw error
       }
     }
   },
-
-  //持久化
-  persist: {
-    enabled: true,
-    strategies: [
-      {
-        key: 'todo-store',
-        storage: localStorage,
-      },
-    ],
-  },
+  persist: true // 添加持久化功能
 })

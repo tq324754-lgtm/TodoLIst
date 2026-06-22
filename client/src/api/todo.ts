@@ -1,17 +1,16 @@
-import axios from 'axios'
 import type { Todo } from '@/types/todo'
 import request from './request'
 
-const BASE_URL = 'http://localhost:3000'
+const BASE_URL = '/api'
 
 //获取
 export function getTodos() {
-  return axios.get<Todo[]>(`${BASE_URL}/todos`)
+  return request.get<Todo[]>(`${BASE_URL}/todos`)
 }
 
 //添加
 export function addTodoApi(text: string) {
-  return axios.post<Todo>(`${BASE_URL}/todos`, {
+  return request.post<Todo>(`${BASE_URL}/todos`, {
     text,
     done: false,
   })
@@ -19,10 +18,23 @@ export function addTodoApi(text: string) {
 
 //删除
 export function deleteTodoApi(id: number) {
-  return axios.delete(`${BASE_URL}/todos/${id}`)
+  return request.delete(`${BASE_URL}/todos/${id}`)
 }
 
 //修改 状态文本
 export function updateTodoApi(id: number, data: Partial<Todo>) {
-  return axios.put(`${BASE_URL}/todos/${id}`, data)
+  return request.put(`${BASE_URL}/todos/${id}`, data)
+}
+
+// 今日统计
+export function getTodayStats(userId?: string) {
+  return request.get(`${BASE_URL}/todos/today-stats`, {
+    params: userId ? { userId } : {}
+  })
+}
+
+export function getWeeklyStats(userId?: string) {
+  return request.get(`${BASE_URL}/todos/weekly-stats`, {
+    params: userId ? { userId } : {}
+  })
 }

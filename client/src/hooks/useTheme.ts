@@ -1,20 +1,12 @@
-import { ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useThemeStore } from '@/stores/theme'
 
 export function useTheme() {
-  const dark = ref(localStorage.getItem('theme') === 'dark')
+  const themeStore = useThemeStore()
+  const { isDark } = storeToRefs(themeStore)
 
-  watch(
-    dark,
-    (val) => {
-      document.documentElement.setAttribute('data-theme', val ? 'dark' : 'light')
-      localStorage.setItem('theme', val ? 'dark' : 'light')
-    },
-    { immediate: true }, // 初始化立即执行，保证刷新不丢主题
-  )
-
-  const toggleTheme = () => {
-    dark.value = !dark.value
+  return {
+    dark: isDark,
+    toggleTheme: themeStore.toggle,
   }
-
-  return { dark, toggleTheme }
 }
